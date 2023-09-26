@@ -148,6 +148,7 @@ def sentence_infilling(tokenizer, inp, mlm_prob=0.35):
     while masked_length < masking_length:
         span_length = min(math.floor(np.random.poisson(3, 1)), token_length - 1)
         start_index = math.floor(np.random.uniform(1, token_length - span_length, 1))
+        # to update for BERT-style, replace w ([tokenizer.mask_token_id] * span_length)
         masked_inputs = masked_inputs[:start_index] + [tokenizer.mask_token_id] + masked_inputs[start_index + span_length:]
         token_length -= span_length - 1
         masked_length += span_length
@@ -498,8 +499,10 @@ def joint_infilling_partial(inp, seg_id, tokenizer, mask_txt=True, mlm_prob=0.35
         text_ids = torch.LongTensor([inp_ids[idx] for idx in range(len(inp_ids)) if seg_iid[idx] == 0])
         amr_ids = torch.LongTensor([inp_ids[idx] for idx in range(len(inp_ids)) if seg_iid[idx] == 1])
         if mask_txt:
+            # mask text, leave AMR as-is
             res.append(torch.cat([sentence_infilling(tokenizer, text_ids, mlm_prob=mlm_prob), amr_ids], dim=0))
         else:
+            # mask AMR, leave text as-is
             res.append(torch.cat([text_ids, sentence_infilling(tokenizer, amr_ids, mlm_prob=mlm_prob)], dim=0))
 
     return pad_sequence(res, batch_first=True, padding_value=tokenizer.pad_token_id)
@@ -573,6 +576,7 @@ def get_STD2partial(batch, tokenizer, inp='text', mlm_prob=0.35):
     If inp == text, then [Masked text -> Text]
     If inp != text, then [Masked Graph -> Graph]
     '''
+    # not used in this code - replaced by MTEG2text, ETMG2graph
     assert inp in ["text", "amr"]
     if inp == "text":
         ori_input = batch["input_ids"]

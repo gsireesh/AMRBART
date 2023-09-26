@@ -1,7 +1,7 @@
 RootDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 dataset=Giga
-DataPath=$RootDir/data/$dataset
+DataPath=/home/sgururaj/src/auxiliary-structure/data/
 
 MODEL=$1
 interval=1
@@ -10,7 +10,7 @@ lr=5e-5
 
 model_size="large"
 
-outpath=output/${dataset}-bart-${model_size}-Unifiedtextinf-JointDenoise-6task-${lr}-AMREOS
+outpath=/home/sgururaj/src/auxiliary-structure/output/${dataset}-bart-${model_size}-Unifiedtextinf-JointDenoise-6task-${lr}-AMREOS
 DataCache=$DataPath/.cache
 
 mkdir -p $outpath
