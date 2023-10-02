@@ -1144,6 +1144,7 @@ def main():
         args.n_gpu = 1
     args.device = device
 
+    wandb_run=None
     if args.local_rank in  {-1, 0} or args.no_cuda:
         wandb_run = wandb.init(entity="flow-graphs-cmu", project="Auxiliary Structure")
         wandb.config.run_type = "AMRBART fine-tune"
