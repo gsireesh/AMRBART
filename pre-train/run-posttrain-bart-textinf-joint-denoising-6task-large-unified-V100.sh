@@ -1,6 +1,10 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+#!/bin/bash
+
+set -euxo pipefail
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 dataset=Giga
-datapath=../data/$dataset
+datapath="/home/sgururaj/src/auxiliary-structure/data/"
 MODEL=$1
 interval=1
 
@@ -8,12 +12,12 @@ lr=5e-5
 
 model_size="large"
 
-outpath=output/${dataset}-bart-${model_size}-Unifiedtextinf-JointDenoise-6task-${lr}-AMREOS
+outpath=/home/sgururaj/src/auxiliary-structure/output/${dataset}-bart-${model_size}-Unifiedtextinf-JointDenoise-6task-${lr}-AMREOS
 
 mkdir -p $outpath
 echo "OutputDir: $outpath"
 
-python -u -m torch.distributed.launch --nproc_per_node=8 run_multitask_unified_pretraining.py \
+/home/sgururaj/miniconda3/envs/amrbart/bin/python -u -m torch.distributed.launch --nproc_per_node=4 run_multitask_unified_pretraining.py \
   --train_file $datapath/train.jsonl \
   --val_file $datapath/val.jsonl \
   --test_file $datapath/test.jsonl \
@@ -27,7 +31,7 @@ python -u -m torch.distributed.launch --nproc_per_node=8 run_multitask_unified_p
   --mlm_joint_to_text \
   --block_size 512 \
   --per_gpu_train_batch_size 2 \
-  --gradient_accumulation_steps 2 \
+  --gradient_accumulation_steps 4 \
   --model_type "facebook/bart-${model_size}" \
   --model_name_or_path $MODEL \
   --save_total_limit 2 \

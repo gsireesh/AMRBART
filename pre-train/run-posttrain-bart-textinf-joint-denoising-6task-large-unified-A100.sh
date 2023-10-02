@@ -1,3 +1,7 @@
+#!/bin/bash
+
+set -euxo pipefail
+
 RootDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 dataset=Giga
@@ -22,7 +26,7 @@ fi
 
 export HF_DATASETS_CACHE=$DataCache
 
-CUDA_VISIBLE_DEVICES=0,1 python -u -m torch.distributed.launch --nproc_per_node=2 run_multitask_unified_pretraining.py \
+CUDA_VISIBLE_DEVICES=0,1  ~/miniconda3/envs/amrbart/bin/python -u -m torch.distributed.launch --nproc_per_node=2 run_multitask_unified_pretraining.py \
   --train_file $DataPath/train.jsonl \
   --val_file $DataPath/val.jsonl \
   --test_file $DataPath/test.jsonl \
