@@ -26,30 +26,24 @@ import argparse
 import glob
 import logging
 import os
-from posixpath import join
 import random
 import re
 import shutil
-from typing import Dict, List, Any, Tuple
-from data_interface.dataset import AMRDataSet, DataCollatorForSeq2Seq
-from model_interface.modeling_bart import BartForConditionalGeneration
-from model_interface.tokenization_bart import AMRBartTokenizer
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from common.utils import (
-    get_STD2partial,
-    get_MTEG2text,
-    get_ETMG2graph,
-    get_PTPG2partial,
-    get_MTMG2partial,
-    get_MTMG2TG,
-    get_inverse_sqrt_schedule_with_warmup,
-    save_dummy_batch,
-)
+import wandb
+
+from common.utils import (get_ETMG2graph, get_MTEG2text, get_MTMG2TG, get_MTMG2partial,
+                          get_PTPG2partial, get_inverse_sqrt_schedule_with_warmup, save_dummy_batch)
+from data_interface.dataset import AMRDataSet, DataCollatorForSeq2Seq
+from model_interface.modeling_bart import BartForConditionalGeneration
+from model_interface.tokenization_bart import AMRBartTokenizer
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 from transformers import (
@@ -142,6 +136,7 @@ def train(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     config,
+    wandb_run=None
 ) -> Tuple[int, float]:
     """ Train the model """
     if args.local_rank in [-1, 0]:
@@ -240,6 +235,10 @@ def train(
     )
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
+
+    if args.local_rank in {-1, 0}:
+        wandb.config.n_training_examples = len(train_dataset)
+
 
     global_step = 0
     epochs_trained = 0
@@ -493,6 +492,17 @@ def train(
                 + amr_joint_loss2
                 + joint2joint_loss
             )
+
+            if args.local_rank in {-1, 0}:
+                wandb_run.log({
+                    "mlm_amr_loss": amr_loss,
+                    "mlm_text_loss": text_loss,
+                    "mlm_amr_plus_text_loss": amr_joint_loss,
+                    "mlm_text_plus_amr_loss": text_joint_loss,
+                    "joint_mlm_to_amr_loss": amr_joint_loss2,
+                    "joint_mlm_to_text_loss": text_joint_loss2,
+                    "joint_mlm_to_joint_loss": joint2joint_loss
+                }, step=global_step)
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -1134,6 +1144,11 @@ def main():
         args.n_gpu = 1
     args.device = device
 
+    if args.local_rank in  {-1, 0} or args.no_cuda:
+        wandb_run = wandb.init(entity="flow-graphs-cmu", project="Auxiliary Structure")
+        wandb.config.run_type = "AMRBART fine-tune"
+        wandb.config.update(args)
+
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -1233,7 +1248,8 @@ def main():
             torch.distributed.barrier()
 
         global_step, tr_loss = train(
-            args, train_dataset, dev_dataset, seq2seq_collate_fn, model, tokenizer, config
+            args, train_dataset, dev_dataset, seq2seq_collate_fn, model, tokenizer, config,
+            wandb_run
         )
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
