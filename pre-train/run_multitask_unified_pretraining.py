@@ -1282,6 +1282,23 @@ def main():
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
         checkpoints = [args.output_dir]
+
+        # if we're just evaluating an existing model that wasn't trained with this script
+        if len(os.listdir(args.output_dir)) == 0:
+            checkpoint_prefix = "checkpoint"
+            # Save model checkpoint
+            output_dir = os.path.join(
+                args.output_dir,
+                "{}-{}-{:.3f}".format(checkpoint_prefix, 0, 0),
+            )
+            os.makedirs(output_dir, exist_ok=True)
+            model_to_save = (
+                model.module if hasattr(model, "module") else model
+            )  # Take care of distributed/parallel training
+            model_to_save.save_pretrained(output_dir)
+            tokenizer.save_pretrained(output_dir)
+            logger.info("Saving model checkpoint to %s", output_dir)
+
         if args.eval_all_checkpoints:
             checkpoints = list(
                 os.path.dirname(c)
