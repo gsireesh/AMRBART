@@ -17,7 +17,7 @@ outpath=/home/sgururaj/src/auxiliary-structure/output/${dataset}-bart-${model_si
 mkdir -p $outpath
 echo "OutputDir: $outpath"
 
-/home/sgururaj/miniconda3/envs/amrbart/bin/python -u -m torch.distributed.launch --nproc_per_node=4 run_multitask_unified_pretraining.py \
+/home/sgururaj/miniconda3/envs/amrbart_2/bin/python -u -m torch.distributed.launch --nproc_per_node=4 run_multitask_unified_pretraining.py \
   --train_file $datapath/train.jsonl \
   --val_file $datapath/val.jsonl \
   --test_file $datapath/test.jsonl \
