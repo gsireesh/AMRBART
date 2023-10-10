@@ -38,8 +38,15 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 import wandb
 
-from common.utils import (get_ETMG2graph, get_MTEG2text, get_MTMG2TG, get_MTMG2partial,
-                          get_PTPG2partial, get_inverse_sqrt_schedule_with_warmup, save_dummy_batch)
+from common.utils import (
+    get_ETMG2graph,
+    get_MTEG2text,
+    get_MTMG2TG,
+    get_MTMG2partial,
+    get_PTPG2partial,
+    get_inverse_sqrt_schedule_with_warmup,
+    save_dummy_batch,
+)
 from data_interface.dataset import AMRDataSet, DataCollatorForSeq2Seq
 from model_interface.modeling_bart import BartForConditionalGeneration
 from model_interface.tokenization_bart import AMRBartTokenizer
@@ -128,6 +135,34 @@ def _rotate_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False) -
         shutil.rmtree(checkpoint)
 
 
+def save_model(
+    model, tokenizer, optimizer, scheduler, args, score, step_repr, rotate_checkpoints=True
+):
+    checkpoint_prefix = "checkpoint"
+    # Save model checkpoint
+    output_dir = os.path.join(
+        args.output_dir,
+        "{}-{}-{:.3f}".format(checkpoint_prefix, step_repr, score),
+    )
+    os.makedirs(output_dir, exist_ok=True)
+    model_to_save = (
+        model.module if hasattr(model, "module") else model
+    )  # Take care of distributed/parallel training
+    model_to_save.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
+    logger.info("Saving model checkpoint to %s", output_dir)
+    torch.save(args, os.path.join(output_dir, "training_args.bin"))
+
+    if rotate_checkpoints:
+        _rotate_checkpoints(args, checkpoint_prefix)
+
+    if optimizer is not None and scheduler is not None:
+        logger.info("Saving optimizer and scheduler states to %s", output_dir)
+        torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+        torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+
+
 def train(
     args,
     train_dataset,
@@ -136,9 +171,9 @@ def train(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     config,
-    wandb_run=None
+    wandb_run=None,
 ) -> Tuple[int, float]:
-    """ Train the model """
+    """Train the model"""
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
@@ -239,7 +274,6 @@ def train(
     if args.local_rank in {-1, 0}:
         wandb.config.n_training_examples = len(train_dataset)
 
-
     global_step = 0
     epochs_trained = 0
     epoch_step = 0
@@ -290,7 +324,6 @@ def train(
             train_sampler.set_epoch(epoch)
 
         for step, batch in enumerate(epoch_iterator):
-
             # Skip past any already trained steps if resuming training
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
@@ -494,15 +527,19 @@ def train(
             )
 
             if args.local_rank in {-1, 0}:
-                wandb_run.log({
-                    "mlm_amr_loss": amr_loss,
-                    "mlm_text_loss": text_loss,
-                    "mlm_amr_plus_text_loss": amr_joint_loss,
-                    "mlm_text_plus_amr_loss": text_joint_loss,
-                    "joint_mlm_to_amr_loss": amr_joint_loss2,
-                    "joint_mlm_to_text_loss": text_joint_loss2,
-                    "joint_mlm_to_joint_loss": joint2joint_loss
-                }, step=global_step)
+                wandb_run.log(
+                    {
+                        "mlm_amr_loss": amr_loss,
+                        "mlm_text_loss": text_loss,
+                        "mlm_amr_plus_text_loss": amr_joint_loss,
+                        "mlm_text_plus_amr_loss": text_joint_loss,
+                        "joint_mlm_to_amr_loss": amr_joint_loss2,
+                        "joint_mlm_to_text_loss": text_joint_loss2,
+                        "joint_mlm_to_joint_loss": joint2joint_loss,
+                        "train_loss": loss,
+                    },
+                    step=global_step,
+                )
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -552,36 +589,26 @@ def train(
                         args.evaluate_during_training
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
                         results = evaluate(
-                            args, eval_dataset, collate_fn, model, tokenizer, config=config
+                            args,
+                            eval_dataset,
+                            collate_fn,
+                            model,
+                            tokenizer,
+                            config=config,
+                            wandb_run=None,
                         )
                         cur_score = results["perplexity"].item()
                         if cur_score < best_score:
                             best_score = cur_score
-                            checkpoint_prefix = "checkpoint"
-                            # Save model checkpoint
-                            output_dir = os.path.join(
-                                args.output_dir,
-                                "{}-{}-{:.3f}".format(checkpoint_prefix, global_step, best_score),
+                            save_model(
+                                model,
+                                tokenizer,
+                                optimizer,
+                                scheduler,
+                                args,
+                                best_score,
+                                global_step,
                             )
-                            os.makedirs(output_dir, exist_ok=True)
-                            model_to_save = (
-                                model.module if hasattr(model, "module") else model
-                            )  # Take care of distributed/parallel training
-                            model_to_save.save_pretrained(output_dir)
-                            tokenizer.save_pretrained(output_dir)
-
-                            torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                            logger.info("Saving model checkpoint to %s", output_dir)
-
-                            _rotate_checkpoints(args, checkpoint_prefix)
-
-                            torch.save(
-                                optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt")
-                            )
-                            torch.save(
-                                scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt")
-                            )
-                            logger.info("Saving optimizer and scheduler states to %s", output_dir)
 
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
@@ -604,32 +631,34 @@ def train(
         if args.max_steps > 0 and global_step > args.max_steps:
             results = evaluate(args, eval_dataset, collate_fn, model, tokenizer, config=config)
             cur_score = results["perplexity"].item()
-            checkpoint_prefix = "checkpoint"
-            # Save model checkpoint
-            output_dir = os.path.join(
-                args.output_dir, "{}-last-{:.3f}".format(checkpoint_prefix, cur_score),
+            save_model(
+                model,
+                tokenizer,
+                optimizer,
+                scheduler,
+                args,
+                cur_score,
+                "last",
+                rotate_checkpoints=False,
             )
-            os.makedirs(output_dir, exist_ok=True)
-            model_to_save = (
-                model.module if hasattr(model, "module") else model
-            )  # Take care of distributed/parallel training
-            model_to_save.save_pretrained(output_dir)
-            tokenizer.save_pretrained(output_dir)
-            logger.info("Saving model checkpoint to %s", output_dir)
             train_iterator.close()
             break
-        
+
+        save_model(
+            model,
+            tokenizer,
+            optimizer,
+            scheduler,
+            args,
+            cur_score,
+            "last_epoch",
+            rotate_checkpoints=False,
+        )
         checkpoint_prefix = "checkpoint"
         output_dir = os.path.join(
-            args.output_dir, "{}-last-epoch".format(checkpoint_prefix),
+            args.output_dir,
+            "{}-last-epoch".format(checkpoint_prefix),
         )
-        os.makedirs(output_dir, exist_ok=True)
-        model_to_save = (
-            model.module if hasattr(model, "module") else model
-        )  # Take care of distributed/parallel training
-        model_to_save.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
-        logger.info("Saving model checkpoint to %s", output_dir)
         avg_epoch_loss = epoch_loss / epoch_step
         logger.info("\nEpoch End... \navg_train_loss = %s", str(avg_epoch_loss))
 
@@ -647,6 +676,7 @@ def evaluate(
     tokenizer: PreTrainedTokenizer,
     config=None,
     prefix="",
+    wandb_run=None,
 ) -> Dict:
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
@@ -677,9 +707,18 @@ def evaluate(
     nb_eval_steps = 0
     model.eval()
 
+    per_task_loss = {
+        "val_mlm_amr_loss": 0.0,
+        "val_mlm_text_loss": 0.0,
+        "val_mlm_amr_plus_text_loss": 0.0,
+        "val_mlm_text_plus_amr_loss": 0.0,
+        "val_joint_mlm_to_amr_loss": 0.0,
+        "val_joint_mlm_to_text_loss": 0.0,
+        "val_joint_mlm_to_joint_loss": 0.0,
+    }
+
     pbar = tqdm(eval_dataloader, desc="Evaluating")
     for batch in pbar:
-
         with torch.no_grad():
             if args.mlm_amr:
                 # masked_input, attention_mask, dec_input, labels = get_mlm_inputs(batch, tokenizer, args, inp='amr')
@@ -689,6 +728,7 @@ def evaluate(
                 )
 
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -709,6 +749,7 @@ def evaluate(
                 )
 
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -727,6 +768,7 @@ def evaluate(
                     batch, tokenizer, inp="text"
                 )
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -745,6 +787,7 @@ def evaluate(
                     batch, tokenizer, inp="amr"
                 )
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -763,6 +806,7 @@ def evaluate(
                     batch, tokenizer, inp="text", mlm_prob=mlm_prob
                 )
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -781,6 +825,7 @@ def evaluate(
                     batch, tokenizer, inp="amr", mlm_prob=mlm_prob
                 )
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -799,6 +844,7 @@ def evaluate(
                     batch, tokenizer, mlm_prob=mlm_prob
                 )
                 masked_input = masked_input.to("cuda:0")
+                attention_mask = attention_mask.to("cuda:0")
                 labels = labels.to("cuda:0")
                 dec_input = dec_input.to("cuda:0")
                 outputs = model(
@@ -824,12 +870,23 @@ def evaluate(
             pbar.set_postfix(lm_loss=loss.mean().item())
 
             eval_loss += loss.mean().item()
+
+            per_task_loss["val_mlm_amr_loss"] += amr_loss.mean().item()
+            per_task_loss["val_mlm_text_loss"] += text_loss.mean().item()
+            per_task_loss["val_mlm_amr_plus_text_loss"] += amr_joint_loss.mean().item()
+            per_task_loss["val_mlm_text_plus_amr_loss"] += text_joint_loss.mean().item()
+            per_task_loss["val_joint_mlm_to_text_loss"] += text_joint_loss2.mean().item()
+            # per_task_loss["val_joint_mlm_to_joint_loss"] += joint2joint_loss.mean().item()
+
         nb_eval_steps += 1
 
     eval_loss = eval_loss / nb_eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
+    for k, v in per_task_loss.items():
+        per_task_loss[k] = v / nb_eval_steps
 
     result = {"perplexity": perplexity, "eval_loss": eval_loss}
+    wandb.log({**result, **per_task_loss})
 
     output_eval_file = os.path.join(eval_output_dir, prefix, "eval_results.txt")
     with open(output_eval_file, "a") as writer:
@@ -1045,7 +1102,9 @@ def main():
         help="Whether to apply smart initialization to new token embedddings",
     )
     parser.add_argument(
-        "--mlm_amr", action="store_true", help="Whether to apply mask language modeling on amrs",
+        "--mlm_amr",
+        action="store_true",
+        help="Whether to apply mask language modeling on amrs",
     )
     parser.add_argument(
         "--mlm_amr_short",
@@ -1053,7 +1112,9 @@ def main():
         help="Whether to apply mask language modeling on amrs, short dec sequence",
     )
     parser.add_argument(
-        "--mlm_text", action="store_true", help="Whether to apply mask language modeling on text",
+        "--mlm_text",
+        action="store_true",
+        help="Whether to apply mask language modeling on text",
     )
     parser.add_argument(
         "--mlm_text_short",
@@ -1081,10 +1142,14 @@ def main():
         help="Whether to apply mask text, plus amr, short dec sequence",
     )
     parser.add_argument(
-        "--mlm_joint_to_amr", action="store_true", help="Whether to apply mask text, amr, to amr",
+        "--mlm_joint_to_amr",
+        action="store_true",
+        help="Whether to apply mask text, amr, to amr",
     )
     parser.add_argument(
-        "--mlm_joint_to_text", action="store_true", help="Whether to apply mask text, amr, to text",
+        "--mlm_joint_to_text",
+        action="store_true",
+        help="Whether to apply mask text, amr, to text",
     )
     parser.add_argument(
         "--mlm_joint_to_joint",
@@ -1092,13 +1157,19 @@ def main():
         help="Whether to apply mask text, amr, to text amr",
     )
     parser.add_argument(
-        "--freeze_embeds", action="store_true", help="Whether to freeze embeddings of the model",
+        "--freeze_embeds",
+        action="store_true",
+        help="Whether to freeze embeddings of the model",
     )
     parser.add_argument(
-        "--freeze_encoder", action="store_true", help="Whether to freeze encoder of the model",
+        "--freeze_encoder",
+        action="store_true",
+        help="Whether to freeze encoder of the model",
     )
     parser.add_argument(
-        "--freeze_decoder", action="store_true", help="Whether to freeze decoder of the modele",
+        "--freeze_decoder",
+        action="store_true",
+        help="Whether to freeze decoder of the modele",
     )
 
     args = parser.parse_args()
@@ -1144,8 +1215,8 @@ def main():
         args.n_gpu = 1
     args.device = device
 
-    wandb_run=None
-    if args.local_rank in  {-1, 0} or args.no_cuda:
+    wandb_run = None
+    if args.local_rank in {-1, 0} or args.no_cuda:
         wandb_run = wandb.init(entity="flow-graphs-cmu", project="Auxiliary Structure")
         wandb.config.run_type = "AMRBART fine-tune"
         wandb.config.update(args)
@@ -1206,7 +1277,7 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
     model.to(args.device)
-    
+
     print(model)
     train_p = [
         n for n, p in model.named_parameters() if p.requires_grad
@@ -1249,8 +1320,14 @@ def main():
             torch.distributed.barrier()
 
         global_step, tr_loss = train(
-            args, train_dataset, dev_dataset, seq2seq_collate_fn, model, tokenizer, config,
-            wandb_run
+            args,
+            train_dataset,
+            dev_dataset,
+            seq2seq_collate_fn,
+            model,
+            tokenizer,
+            config,
+            wandb_run,
         )
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
         args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
@@ -1284,20 +1361,14 @@ def main():
         checkpoints = [args.output_dir]
 
         # if we're just evaluating an existing model that wasn't trained with this script
-        if len(os.listdir(args.output_dir)) == 0:
+        if not os.path.exists(args.output_dir) or not any(
+            [os.path.isdir(f) for f in os.listdir(args.output_dir)]
+        ):
             checkpoint_prefix = "checkpoint"
             # Save model checkpoint
-            output_dir = os.path.join(
-                args.output_dir,
-                "{}-{}-{:.3f}".format(checkpoint_prefix, 0, 0),
+            save_model(
+                model, tokenizer, None, None, args, 0, "placeholder", rotate_checkpoints=False
             )
-            os.makedirs(output_dir, exist_ok=True)
-            model_to_save = (
-                model.module if hasattr(model, "module") else model
-            )  # Take care of distributed/parallel training
-            model_to_save.save_pretrained(output_dir)
-            tokenizer.save_pretrained(output_dir)
-            logger.info("Saving model checkpoint to %s", output_dir)
 
         if args.eval_all_checkpoints:
             checkpoints = list(
