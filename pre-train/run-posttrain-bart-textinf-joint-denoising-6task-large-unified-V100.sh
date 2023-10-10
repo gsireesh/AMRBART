@@ -3,7 +3,7 @@
 set -euxo pipefail
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-dataset=Giga
+dataset=AMR_only
 datapath="/home/sgururaj/src/auxiliary-structure/data/"
 MODEL=$1
 interval=1

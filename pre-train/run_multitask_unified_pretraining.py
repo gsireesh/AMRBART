@@ -154,13 +154,13 @@ def save_model(
     logger.info("Saving model checkpoint to %s", output_dir)
     torch.save(args, os.path.join(output_dir, "training_args.bin"))
 
-    if rotate_checkpoints:
-        _rotate_checkpoints(args, checkpoint_prefix)
-
     if optimizer is not None and scheduler is not None:
         logger.info("Saving optimizer and scheduler states to %s", output_dir)
         torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
         torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+
+    if rotate_checkpoints:
+        _rotate_checkpoints(args, checkpoint_prefix)
 
 
 def train(
@@ -874,6 +874,7 @@ def evaluate(
             per_task_loss["val_mlm_amr_loss"] += amr_loss.mean().item()
             per_task_loss["val_mlm_text_loss"] += text_loss.mean().item()
             per_task_loss["val_mlm_amr_plus_text_loss"] += amr_joint_loss.mean().item()
+            per_task_loss["val_joint_mlm_to_amr_loss"]  += amr_joint_loss2.mean().item()
             per_task_loss["val_mlm_text_plus_amr_loss"] += text_joint_loss.mean().item()
             per_task_loss["val_joint_mlm_to_text_loss"] += text_joint_loss2.mean().item()
             # per_task_loss["val_joint_mlm_to_joint_loss"] += joint2joint_loss.mean().item()
