@@ -650,7 +650,7 @@ def train(
             optimizer,
             scheduler,
             args,
-            cur_score,
+            0,
             "last_epoch",
             rotate_checkpoints=False,
         )
@@ -874,7 +874,7 @@ def evaluate(
             per_task_loss["val_mlm_amr_loss"] += amr_loss.mean().item()
             per_task_loss["val_mlm_text_loss"] += text_loss.mean().item()
             per_task_loss["val_mlm_amr_plus_text_loss"] += amr_joint_loss.mean().item()
-            per_task_loss["val_joint_mlm_to_amr_loss"]  += amr_joint_loss2.mean().item()
+            per_task_loss["val_joint_mlm_to_amr_loss"] += amr_joint_loss2.mean().item()
             per_task_loss["val_mlm_text_plus_amr_loss"] += text_joint_loss.mean().item()
             per_task_loss["val_joint_mlm_to_text_loss"] += text_joint_loss2.mean().item()
             # per_task_loss["val_joint_mlm_to_joint_loss"] += joint2joint_loss.mean().item()
